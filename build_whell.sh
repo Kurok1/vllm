@@ -1,0 +1,5 @@
+export VLLM_USE_PRECOMPILED=1 #启用预编译，不编译CUDA
+export VLLM_COMMIT=275de34170654274616082721348b7edd9741d32 #记录提交，防止从主分支合并
+export VLLM_TEST_USE_PRECOMPILED_NIGHTLY_WHEEL=1
+#构建
+python -m build --wheel
