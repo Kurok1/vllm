@@ -8,6 +8,7 @@ from collections.abc import AsyncGenerator, Sequence
 from typing import Final, cast
 
 import jinja2
+import torch
 from fastapi import Request
 from typing_extensions import assert_never
 
@@ -70,6 +71,49 @@ class OpenAIServingPooling(OpenAIServing):
         self.chat_template_content_format: Final = chat_template_content_format
         self.trust_request_chat_template = trust_request_chat_template
 
+    @staticmethod
+    def decode_for_chat(preds, offsets, text, id2label, need_offsets = True):
+        ents = []
+        cur = None
+
+        for p, (s, e) in zip(preds, offsets):
+            if s == e:
+                continue
+
+            if need_offsets:
+                s = s + 1;
+                e = e + 1;
+
+            label = id2label[p]
+
+            if label == "O":
+                if cur:
+                    ents.append(cur)
+                    cur = None
+                continue
+
+            tag, ent = label.split("-", 1)
+
+            if tag == "B":
+                if cur:
+                    ents.append(cur)
+
+                cur = {
+                    "type": ent,
+                    "start": s,
+                    "end": e,
+                    "text": text[s:e]
+                }
+
+            elif tag == "I" and cur:
+                cur["end"] = e
+                cur["text"] = text[cur["start"]:e]
+
+        if cur:
+            ents.append(cur)
+
+        return ents
+
     async def create_pooling(
         self,
         request: PoolingRequest,
@@ -108,6 +152,7 @@ class OpenAIServingPooling(OpenAIServing):
                 self.max_model_len, truncate_prompt_tokens
             )
 
+            input_prompts = []
             if is_io_processor_request:
                 if self.io_processor is None:
                     raise ValueError(
@@ -118,7 +163,7 @@ class OpenAIServingPooling(OpenAIServing):
                     )
 
                 validated_prompt = self.io_processor.parse_request(request)
-
+                input_prompts.append(validated_prompt)
                 engine_prompts = await self.io_processor.pre_process_async(
                     prompt=validated_prompt, request_id=request_id
                 )
@@ -128,6 +173,9 @@ class OpenAIServingPooling(OpenAIServing):
                     engine_prompts = [engine_prompts]
 
             elif isinstance(request, PoolingChatRequest):
+                for message in request.messages:
+                    input_prompts.append(message['content'])
+
                 error_check_ret = self._validate_chat_template(
                     request_chat_template=request.chat_template,
                     chat_template_kwargs=request.chat_template_kwargs,
@@ -152,6 +200,7 @@ class OpenAIServingPooling(OpenAIServing):
                     add_special_tokens=request.add_special_tokens,
                 )
             elif isinstance(request, PoolingCompletionRequest):
+                input_prompts.append(request.input)
                 engine_prompts = await renderer.render_prompt(
                     prompt_or_prompts=request.input,
                     config=self._build_render_config(request),
@@ -254,6 +303,8 @@ class OpenAIServingPooling(OpenAIServing):
             final_res_batch_checked = cast(list[PoolingRequestOutput], final_res_batch)
 
             response = self.request_output_to_pooling_response(
+                input_prompts,
+                isinstance(request, PoolingCompletionRequest),
                 final_res_batch_checked,
                 request_id,
                 created_time,
@@ -272,6 +323,8 @@ class OpenAIServingPooling(OpenAIServing):
 
     def request_output_to_pooling_response(
         self,
+        input_prompts: list[str],
+        isInput: bool,
         final_res_batch: list[PoolingRequestOutput],
         request_id: str,
         created_time: int,
@@ -280,6 +333,40 @@ class OpenAIServingPooling(OpenAIServing):
         embed_dtype: EmbedDType,
         endianness: Endianness,
     ) -> PoolingResponse | PoolingBytesResponse:
+
+        def encode_json():
+            print("json...")
+            items: list[PoolingResponseData] = []
+            num_prompt_tokens = 0
+
+            for idx, final_res in enumerate(final_res_batch):
+                logits = final_res.outputs.data
+                pred_ids = logits.argmax(dim=-1).tolist()
+                tokenizer = self.engine_client.processor.tokenizer
+                enc = tokenizer(input_prompts[idx], return_offsets_mapping=True, return_tensors="pt", add_special_tokens=True, )
+                offsets = enc.pop("offset_mapping")[0].tolist()
+                item = PoolingResponseData(
+                    index=idx,
+                    data=str(self.decode_for_chat(pred_ids, offsets, input_prompts[idx], self.model_config.hf_config.id2label, not isInput)),
+                )
+                prompt_token_ids = final_res.prompt_token_ids
+
+                items.append(item)
+                num_prompt_tokens += len(prompt_token_ids)
+
+            usage = UsageInfo(
+                prompt_tokens=num_prompt_tokens,
+                total_tokens=num_prompt_tokens,
+            )
+
+            return PoolingResponse(
+                id=request_id,
+                created=created_time,
+                model=model_name,
+                data=items,
+                usage=usage,
+            )
+
         def encode_float_base64():
             items: list[PoolingResponseData] = []
             num_prompt_tokens = 0
@@ -335,6 +422,8 @@ class OpenAIServingPooling(OpenAIServing):
             return encode_float_base64()
         elif encoding_format == "bytes":
             return encode_bytes()
+        elif encoding_format == "json":
+            return encode_json()
         else:
             assert_never(encoding_format)
 

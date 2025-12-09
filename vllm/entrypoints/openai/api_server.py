@@ -17,7 +17,7 @@ from argparse import Namespace
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from http import HTTPStatus
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Mapping
 
 import model_hosting_container_standards.sagemaker as sagemaker_standards
 import prometheus_client
@@ -668,6 +668,9 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
     metrics_header_format = raw_request.headers.get(
         ENDPOINT_LOAD_METRICS_FORMAT_HEADER_LABEL, ""
     )
+    model_name = raw_request.headers.get("X-Model")
+    if request.model is None:
+        request.model = model_name
     handler = chat(raw_request)
     if handler is None:
         return base(raw_request).create_error_response(
@@ -685,9 +688,12 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
         )
 
     elif isinstance(generator, ChatCompletionResponse):
+        headers = metrics_header(metrics_header_format)
+        headers['X-Prompt-Tokens'] = str(generator.usage.prompt_tokens)
+        headers['X-Output-Tokens'] = str(generator.usage.output_tokens)
         return JSONResponse(
             content=generator.model_dump(),
-            headers=metrics_header(metrics_header_format),
+            headers=headers,
         )
 
     return StreamingResponse(content=generator, media_type="text/event-stream")
@@ -794,6 +800,9 @@ async def create_embedding(
 @load_aware_call
 async def create_pooling(request: PoolingRequest, raw_request: Request):
     handler = pooling(raw_request)
+    model_name = raw_request.headers.get("X-Model")
+    if request.model is None:
+        request.model = model_name
     if handler is None:
         return base(raw_request).create_error_response(
             message="The model does not support Pooling API"
@@ -809,7 +818,12 @@ async def create_pooling(request: PoolingRequest, raw_request: Request):
             content=generator.model_dump(), status_code=generator.error.code
         )
     elif isinstance(generator, (PoolingResponse, IOProcessorResponse)):
-        return JSONResponse(content=generator.model_dump())
+        usage = generator.usage
+        headers : Mapping[str, str] = {
+            'X-Prompt-Tokens': str(usage.prompt_tokens),
+            'X-Output-Tokens': '0',
+        }
+        return JSONResponse(content=generator.model_dump(), headers=headers)
     elif isinstance(generator, PoolingBytesResponse):
         return StreamingResponse(
             content=generator.body,

@@ -49,7 +49,7 @@ ENDIANNESS = ["native", "big", "little"]
 
 EmbedDType = Literal["float32", "float16", "bfloat16", "fp8_e4m3", "fp8_e5m2"]
 Endianness = Literal["native", "big", "little"]
-EncodingFormat = Literal["float", "base64", "bytes"]
+EncodingFormat = Literal["float", "base64", "bytes", "json"]
 
 
 def tensor2binary(
