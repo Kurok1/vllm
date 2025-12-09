@@ -689,8 +689,14 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 
     elif isinstance(generator, ChatCompletionResponse):
         headers = metrics_header(metrics_header_format)
-        headers['X-Prompt-Tokens'] = str(generator.usage.prompt_tokens)
-        headers['X-Output-Tokens'] = str(generator.usage.output_tokens)
+        if headers is None:
+            headers : Mapping[str, str] = {
+                'X-Prompt-Tokens': str(generator.usage.prompt_tokens),
+                'X-Output-Tokens': str(generator.usage.completion_tokens),
+            }
+        else:
+            headers['X-Prompt-Tokens'] = str(generator.usage.prompt_tokens)
+            headers['X-Output-Tokens'] = str(generator.usage.completion_tokens)
         return JSONResponse(
             content=generator.model_dump(),
             headers=headers,
