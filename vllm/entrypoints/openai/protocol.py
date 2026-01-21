@@ -1963,11 +1963,17 @@ class EmbeddingBytesResponse(OpenAIBaseModel):
     metadata: str
     media_type: str = "application/octet-stream"
 
+class TokenClassifyResponseData(OpenAIBaseModel):
+    type: str
+    start: int
+    end: int
+    text: str
 
 class PoolingResponseData(OpenAIBaseModel):
     index: int
     object: str = "pooling"
-    data: list[list[float]] | list[float] | str
+    data: list[list[float]] | list[float] | list[TokenClassifyResponseData] | str
+
 
 
 class PoolingResponse(OpenAIBaseModel):

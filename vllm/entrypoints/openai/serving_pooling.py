@@ -25,7 +25,7 @@ from vllm.entrypoints.openai.protocol import (
     PoolingRequest,
     PoolingResponse,
     PoolingResponseData,
-    UsageInfo,
+    UsageInfo, TokenClassifyResponseData,
 )
 from vllm.entrypoints.openai.serving_engine import OpenAIServing
 from vllm.entrypoints.openai.serving_models import OpenAIServingModels
@@ -72,8 +72,8 @@ class OpenAIServingPooling(OpenAIServing):
         self.trust_request_chat_template = trust_request_chat_template
 
     @staticmethod
-    def decode_for_chat(preds, offsets, text, id2label, need_offsets = True):
-        ents = []
+    def decode_for_chat(preds, offsets, text, id2label, need_offsets = True) -> list[TokenClassifyResponseData]:
+        ents : list[TokenClassifyResponseData]= []
         cur = None
 
         for p, (s, e) in zip(preds, offsets):
@@ -98,16 +98,11 @@ class OpenAIServingPooling(OpenAIServing):
                 if cur:
                     ents.append(cur)
 
-                cur = {
-                    "type": ent,
-                    "start": s,
-                    "end": e,
-                    "text": text[s:e]
-                }
+                cur = TokenClassifyResponseData(type=ent, start=s, end=e, text=text[s:e])
 
             elif tag == "I" and cur:
-                cur["end"] = e
-                cur["text"] = text[cur["start"]:e]
+                cur.end = e
+                cur.text = text[cur.start:e]
 
         if cur:
             ents.append(cur)
@@ -347,7 +342,7 @@ class OpenAIServingPooling(OpenAIServing):
                 offsets = enc.pop("offset_mapping")[0].tolist()
                 item = PoolingResponseData(
                     index=idx,
-                    data=str(self.decode_for_chat(pred_ids, offsets, input_prompts[idx], self.model_config.hf_config.id2label, not isInput)),
+                    data=self.decode_for_chat(pred_ids, offsets, input_prompts[idx], self.model_config.hf_config.id2label, not isInput),
                 )
                 prompt_token_ids = final_res.prompt_token_ids
 
